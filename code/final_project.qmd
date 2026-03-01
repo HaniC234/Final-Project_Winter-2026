@@ -124,20 +124,30 @@ socio['socio_index'].describe()
 
 6. Mapping socio vulnerability index
 ```{python}
+socio["socio_percentile"] = (
+    socio["socio_index"]
+    .rank(pct=True)
+)
+
 max_abs = abs(socio['socio_index']).max()
-fig, ax = plt.subplots(figsize=(6,8))
+fig, ax = plt.subplots(figsize=(7,7))
 
 socio.plot(
-    column='socio_index',
+    column='socio_percentile',
     cmap='RdBu_r',
-    vmin=-2,
-    vmax=2,
+    linewidth = 0.1,
     legend=True,
+    legend_kwds={"label": "Socioeconomic Vulnerability Percentile\n(0 = lowest exposure, 1 = highest exposure)","orientation": "vertical"},
     ax=ax
 )
 
-ax.set_title("Socioeconomic Vulnerability Index (Chicago)")
+ax.set_title("Socioeconomic Vulnerability Index Percentile by Census Tract\nChicago, IL",
+    fontsize=14,
+    pad=12)
+
 ax.set_axis_off()
+
+plt.tight_layout()
 plt.show()
 ```
 
