@@ -1,0 +1,142 @@
+---
+title: "Untitled"
+format: html
+---
+
+0. Loading
+```{python}
+import pandas as pd
+from pathlib import Path
+import os
+import geopandas as gpd
+from shapely.geometry import Point
+import numpy as np
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+```
+
+# For SocioEconomic Vulnerability Index
+1. Reading in all the file
+```{python}
+DATA_CLEAN_DIR = Path("data/derived")
+DATA_DIR = Path("data/raw")
+
+income = pd.read_csv(DATA_CLEAN_DIR / "income_clean.csv")
+renter = pd.read_csv(DATA_CLEAN_DIR / "renter_clean.csv")
+housing_age = pd.read_csv(DATA_CLEAN_DIR / "housing_age_clean.csv")
+home_value = pd.read_csv(DATA_CLEAN_DIR / "home_value_clean.csv")
+
+tracts = gpd.read_file(DATA_DIR / 'tl_2023_17_tract'/ "tl_2023_17_tract.shp")
+
+```
+
+2. Clip All Dataframe into Chicago Shape
+```{python}
+tracts = gpd.read_file(DATA_DIR / 'tl_2023_17_tract'/ "tl_2023_17_tract.shp")
+tracts["GEOID"] = tracts["GEOID"].astype(str)
+cook_tracts = tracts[tracts["COUNTYFP"] == "031"].copy()
+
+def make_it_geo(df, base_map):
+    df["GEOID"] = df["GEOID"].astype(str)
+    return base_map.merge(df, on="GEOID", how="inner")
+
+gdf_income = make_it_geo(income, cook_tracts)
+gdf_renter = make_it_geo(renter, cook_tracts)
+gdf_age = make_it_geo(housing_age, cook_tracts)
+gdf_home = make_it_geo(home_value, cook_tracts)
+
+city = gpd.read_file(DATA_DIR / "Boundaries_Chicago.geojson")
+city = city.to_crs(gdf_income.crs)
+city_union = city.geometry.unary_union
+
+def clip_to_chicago_and_save(gdf, name):
+    gdf = gdf.to_crs(city.crs)
+    
+    gdf_chi = gdf[gdf.geometry.centroid.within(city_union)].copy()
+    
+    # as csv
+    cols_to_save = [c for c in gdf_chi.columns if c != 'geometry']
+    csv_filename = f"{name}_chicago.csv"
+    gdf_chi[cols_to_save].to_csv(csv_filename, index=False)
+    
+    # as gpkg
+    gdf_chi.crs = "EPSG:4326" 
+    gpkg_filename = f"{name}_chicago.gpkg"
+    gdf_chi.to_file(gpkg_filename, layer='tracts', driver="GPKG")
+    
+    print(f"✅ {name} done:")
+    print(f"   - Number of Tracts being kept: {len(gdf_chi)}")
+    print(f"   - Saved: {csv_filename} & {gpkg_filename}")
+    return gdf_chi
+
+gdfs = {"income_24c": gdf_income, "renter_24c": gdf_renter, "house_age_24c": gdf_age, "home_value_24c": gdf_home}
+chicago_gdfs = {} 
+
+for name, target_gdf in gdfs.items():
+    chicago_gdfs[name] = clip_to_chicago_and_save(target_gdf, name)
+
+income_chi = chicago_gdfs["income_24c"]
+renter_chi = chicago_gdfs["renter_24c"]
+age_chi = chicago_gdfs["house_age_24c"]
+home_value_chi = chicago_gdfs["home_value_24c"]
+
+```
+
+3. Standardizing all variables
+```{python}
+def zscore(series):
+    return (series - series.mean()) / series.std()
+
+income_chi['income_z'] = -zscore(income_chi['median_income'])
+renter_chi['renter_z'] = zscore(renter_chi['renter_share'])
+age_chi['age_z'] = zscore(age_chi['old_housing_share'])
+home_value_chi['home_value_z'] = -zscore(home_value_chi['median_home_value'])
+
+```
+
+4. Sanity Check for each variable
+```{python}
+print(income_chi['income_z'].describe())
+print(renter_chi['renter_z'].describe())
+print(age_chi['age_z'].describe())
+print(home_value_chi['home_value_z'].describe())
+```
+
+5. Setting up the Socio Index
+```{python}
+socio = income_chi[['GEOID', 'geometry', 'income_z']].merge(
+    renter_chi[['GEOID', 'renter_z']],
+    on='GEOID', how = 'inner').merge(
+    age_chi[['GEOID', 'age_z']],
+    on='GEOID', how = 'inner').merge(
+    home_value_chi[['GEOID', 'home_value_z']],
+    on='GEOID', how = 'inner')
+
+socio['socio_index'] = (
+    2 * socio['income_z'] +
+    0.5 * socio['renter_z'] +
+    0.5 * socio['age_z'] +
+    2 * socio['home_value_z']) / 5
+
+socio['socio_index'].describe()
+```
+
+6. Mapping socio vulnerability index
+```{python}
+max_abs = abs(socio['socio_index']).max()
+fig, ax = plt.subplots(figsize=(6,8))
+
+socio.plot(
+    column='socio_index',
+    cmap='RdBu_r',
+    vmin=-2,
+    vmax=2,
+    legend=True,
+    ax=ax
+)
+
+ax.set_title("Socioeconomic Vulnerability Index (Chicago)")
+ax.set_axis_off()
+plt.show()
+```
