@@ -20,8 +20,8 @@ import seaborn as sns
 # For SocioEconomic Vulnerability Index
 1. Reading in all the file
 ```{python}
-DATA_CLEAN_DIR = Path("data/derived")
-DATA_DIR = Path("data/raw")
+DATA_CLEAN_DIR = Path("data/derived-data")
+DATA_DIR = Path("data/raw-data")
 
 income = pd.read_csv(DATA_CLEAN_DIR / "income_clean.csv")
 renter = pd.read_csv(DATA_CLEAN_DIR / "renter_clean.csv")
