@@ -1,0 +1,385 @@
+---
+title: "Envrionmental Exposure Index"
+format: html
+---
+
+```{python}
+import geopandas as gpd
+import os
+from pathlib import Path
+import pandas as pd
+import rasterio
+from rasterio.warp import calculate_default_transform, reproject, Resampling
+from rasterio.mask import mask
+import numpy as np
+from rasterstats import zonal_stats
+```
+
+# Spatial Alignment (CRS + Clipping)
+```{python}
+DATA_DIR = Path("raw-data")
+PROCESSED_DIR = Path("processed-data")
+OUT_DIR = PROCESSED_DIR / "aligned"
+
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+TARGET_CRS = "EPSG:3435"
+
+TRACTS_PATH  = DATA_DIR / "tl_2022_17_tract.shp"
+CHICAGO_PATH = DATA_DIR / "Boundaries_Chicago.geojson"
+ROADS_PATH   = DATA_DIR / "tl_2022_17_prisecroads.shp"
+TRI_CSV_PATH = DATA_DIR / "EPA_TRI_IL_2022.csv"
+
+RASTERS = {
+    "lst_summer": DATA_DIR / "chicago_summer_LST.tif",
+    "lst_winter": DATA_DIR / "chicago_winter_LST.tif",
+    "ndvi_summer": DATA_DIR / "chicago_summer_NDVI.tif",
+    "impervious": DATA_DIR / "chicago_impervious.tif",
+}
+
+OUT_DIR = Path("processed-data") / "aligned"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def drop_empty(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    return gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty].copy()
+
+def fix_geom(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    gdf = gdf.copy()
+    gdf["geometry"] = gdf.geometry.make_valid()
+    return gdf
+
+def dissolve_to_single_polygon(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    return gdf.dissolve()
+
+def reproject_and_clip_raster_to_mask(src_path, dst_path, mask_gdf, target_crs=TARGET_CRS):
+    """
+    Reprojects raster to target CRS, then clips to mask geometry.
+    Writes GeoTIFF to dst_path.
+    """
+    with rasterio.open(src_path) as src:
+        src_crs = src.crs
+        if src_crs is None:
+            raise ValueError(f"Raster has no CRS: {src_path}")
+
+        transform, width, height = calculate_default_transform(
+            src_crs, target_crs, src.width, src.height, *src.bounds
+        )
+
+        dst_meta = src.meta.copy()
+        dst_meta.update({
+            "crs": target_crs,
+            "transform": transform,
+            "width": width,
+            "height": height
+        })
+
+        tmp_path = OUT_DIR / "__tmp_reproject.tif"
+        with rasterio.open(tmp_path, "w", **dst_meta) as dst:
+            for i in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, i),
+                    destination=rasterio.band(dst, i),
+                    src_transform=src.transform,
+                    src_crs=src_crs,
+                    dst_transform=transform,
+                    dst_crs=target_crs,
+                    resampling=Resampling.bilinear, 
+                )
+
+    with rasterio.open(tmp_path) as reproj:
+        geoms = [geom for geom in mask_gdf.geometry]
+        out_img, out_transform = mask(reproj, geoms, crop=True)
+        out_meta = reproj.meta.copy()
+        out_meta.update({
+            "height": out_img.shape[1],
+            "width": out_img.shape[2],
+            "transform": out_transform
+        })
+
+    with rasterio.open(dst_path, "w", **out_meta) as out:
+        out.write(out_img)
+
+    try:
+        os.remove(tmp_path)
+    except OSError:
+        pass
+
+tracts = gpd.read_file(TRACTS_PATH)
+tracts = drop_empty(tracts)
+tracts = fix_geom(tracts)
+
+chicago = gpd.read_file(CHICAGO_PATH)
+chicago = drop_empty(chicago)
+chicago = fix_geom(chicago)
+
+tracts = tracts.to_crs(TARGET_CRS)
+chicago = chicago.to_crs(TARGET_CRS)
+
+chicago_poly = dissolve_to_single_polygon(chicago)
+tracts_chicago = gpd.clip(tracts, chicago_poly)
+
+print("Chicago tracts:", len(tracts_chicago))
+
+roads = gpd.read_file(ROADS_PATH)
+roads = drop_empty(roads)
+roads = fix_geom(roads)
+roads = roads.to_crs(TARGET_CRS)
+roads_chicago = gpd.clip(roads, chicago_poly)
+
+print("Road segments (clipped):", len(roads_chicago))
+
+tri = pd.read_csv(TRI_CSV_PATH)
+
+tri = tri.dropna(subset=["12. LATITUDE", "13. LONGITUDE"]).copy()
+
+tri_gdf = gpd.GeoDataFrame(
+    tri,
+    geometry=gpd.points_from_xy(tri["13. LONGITUDE"], tri["12. LATITUDE"]),
+    crs="EPSG:4326"
+).to_crs(TARGET_CRS)
+
+tri_gdf = gpd.clip(tri_gdf, chicago_poly)
+
+print("TRI points (clipped):", len(tri_gdf))
+
+tracts_chicago.to_file(OUT_DIR / "tracts_chicago_2022.gpkg", layer="tracts", driver="GPKG")
+roads_chicago.to_file(OUT_DIR / "roads_chicago_2022.gpkg", layer="roads", driver="GPKG")
+tri_gdf.to_file(OUT_DIR / "tri_chicago_2022.gpkg", layer="tri", driver="GPKG")
+
+for name, path in RASTERS.items():
+    out_path = OUT_DIR / f"{name}_3435_clip.tif"
+    reproject_and_clip_raster_to_mask(path, out_path, chicago_poly, target_crs=TARGET_CRS)
+    print("Wrote:", out_path)
+
+print("\nDone. Everything is aligned to", TARGET_CRS, "and clipped to Chicago.")
+```
+
+# Extracting Metrics from Aligned Data
+```{python}
+tracts = gpd.read_file(OUT_DIR / "tracts_chicago_2022.gpkg", layer="tracts")
+roads  = gpd.read_file(OUT_DIR / "roads_chicago_2022.gpkg", layer="roads")
+tri    = gpd.read_file(OUT_DIR / "tri_chicago_2022.gpkg", layer="tri")
+
+def add_zonal_mean(gdf, raster_path, out_col):
+    zs = zonal_stats(gdf, raster_path, stats=["mean"], all_touched=False)
+    gdf[out_col] = [d["mean"] for d in zs]
+    return gdf
+
+tracts = add_zonal_mean(tracts, OUT_DIR / "lst_summer_3435_clip.tif", "lst_summer_mean")
+
+tracts = add_zonal_mean(
+    tracts,
+    OUT_DIR / "lst_winter_3435_clip.tif",
+    "lst_winter_mean"
+)
+
+tracts = add_zonal_mean(
+    tracts,
+    OUT_DIR / "ndvi_summer_3435_clip.tif",
+    "ndvi_mean"
+)
+
+tracts = add_zonal_mean(
+    tracts,
+    OUT_DIR / "impervious_3435_clip.tif",
+    "impervious_mean"
+)
+
+roads_x = gpd.overlay(
+    roads[["geometry"]],
+    tracts[["GEOID", "geometry"]],
+    how="intersection"
+)
+
+roads_x["road_len_ft"] = roads_x.geometry.length
+
+road_sum = (
+    roads_x.groupby("GEOID")["road_len_ft"]
+    .sum()
+    .reset_index()
+)
+
+tracts["tract_area_ft2"] = tracts.geometry.area
+
+tracts = tracts.merge(road_sum, on="GEOID", how="left")
+tracts["road_len_ft"] = tracts["road_len_ft"].fillna(0)
+
+tracts["road_density"] = (
+    tracts["road_len_ft"] /
+    tracts["tract_area_ft2"]
+)
+
+tri = tri.copy()
+
+tri["total_releases"] = pd.to_numeric(
+    tri["107. TOTAL RELEASES"],
+    errors="coerce"
+).fillna(0)
+
+tri_join = gpd.sjoin(
+    tri,
+    tracts[["GEOID", "geometry"]],
+    how="inner",
+    predicate="within"
+)
+
+tri_summary = (
+    tri_join.groupby("GEOID")
+    .agg(
+        tri_release_total=("total_releases", "sum"),
+        tri_facility_count=("2. TRIFD", "nunique")
+    )
+    .reset_index()
+)
+
+tracts = tracts.merge(
+    tri_summary,
+    on="GEOID",
+    how="left"
+)
+
+tracts["tri_release_total"] = tracts["tri_release_total"].fillna(0)
+tracts["tri_facility_count"] = tracts["tri_facility_count"].fillna(0)
+
+cols = [
+    "lst_summer_mean",
+    "lst_winter_mean",
+    "ndvi_mean",
+    "impervious_mean",
+    "road_density",
+    "tri_release_total",
+    "tri_facility_count"
+]
+
+print(tracts[cols].isna().sum())
+print(tracts[cols].describe())
+```
+
+# Data Cleaning -1
+```{python}
+tracts = tracts.dropna(subset=[
+    "lst_summer_mean",
+    "lst_winter_mean",
+    "ndvi_mean",
+    "impervious_mean"
+])
+
+tracts["ndvi_bad"] = -tracts["ndvi_mean"]
+
+tracts["tri_release_log"] = np.log1p(
+    tracts["tri_release_total"]
+)
+
+tracts["cold_bad"] = -tracts["lst_winter_mean"]
+```
+
+# Data Cleaning -2
+```{python}
+print("Rows after dropna:", len(tracts))
+
+qa_cols = [
+    "lst_summer_mean",
+    "lst_winter_mean",
+    "ndvi_mean",
+    "ndvi_bad",
+    "impervious_mean",
+    "road_density",
+    "tri_release_total",
+    "tri_release_log",
+    "tri_facility_count"
+]
+print("\nMissing values:")
+print(tracts[qa_cols].isna().sum())
+
+print("\nInf values:")
+print(np.isinf(tracts[qa_cols]).sum())
+
+print("\nNDVI range (should be roughly -1 to 1):",
+      tracts["ndvi_mean"].min(), tracts["ndvi_mean"].max())
+
+print("Impervious range (often 0–100 or 0–1 depending on dataset):",
+      tracts["impervious_mean"].min(), tracts["impervious_mean"].max())
+
+print("\nTRI raw summary:")
+print(tracts["tri_release_total"].describe())
+
+print("\nTRI log summary:")
+print(tracts["tri_release_log"].describe())
+
+print("\nInvalid geometries:", (~tracts.is_valid).sum())
+print("Empty geometries:", tracts.geometry.is_empty.sum())
+```
+
+# Z-Score Standardization
+```{python}
+vars_for_index = [
+    "lst_summer_mean",
+    "ndvi_bad",
+    "impervious_mean",
+    "road_density",
+    "tri_release_log"
+]
+
+for v in vars_for_index:
+    tracts[f"z_{v}"] = (
+        tracts[v] - tracts[v].mean()
+    ) / tracts[v].std()
+
+weights = {
+    "z_lst_summer_mean": 0.25,     
+    "z_ndvi_bad": 0.125,           
+    "z_impervious_mean": 0.125,    
+    "z_road_density": 0.25,        
+    "z_tri_release_log": 0.25      
+}
+
+tracts["env_exposure_index"] = sum(
+    tracts[var] * weight
+    for var, weight in weights.items()
+)
+
+print(tracts["env_exposure_index"].describe())
+```
+
+# Visualize Results
+```{python}
+tracts["exposure_percentile"] = (
+    tracts["env_exposure_index"]
+    .rank(pct=True)
+)
+
+tracts.plot(
+    column="exposure_percentile",
+    cmap="viridis",
+    legend=True,
+    figsize=(6,6)
+)
+```
+
+# Spatial Join with Community Areas
+```{python}
+community = gpd.read_file(DATA_DIR / "Boundaries_-_Community_Areas_20260228.geojson")
+
+community = community.to_crs(tracts.crs)
+
+if "index_right" in tracts.columns:
+    tracts = tracts.drop(columns="index_right")
+
+tracts = gpd.sjoin(
+    tracts,
+    community[["community", "geometry"]],
+    how="left",
+    predicate="intersects"
+)
+```
+
+
+# Save Final Results
+```{python}
+tracts.to_file(PROCESSED_DIR / "chicago_env_exposure_index.gpkg", layer="tracts", driver="GPKG")
+
+tracts.drop(columns="geometry").to_csv(PROCESSED_DIR / "chicago_env_exposure_index.csv", index=False)
+```
+
