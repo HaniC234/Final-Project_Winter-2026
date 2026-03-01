@@ -1,5 +1,5 @@
-title: 'Socio Vulnerability Index'
-author: 'Cassie'
+title: ''
+author: 'Cassie & Hani'
 format: html
 ---
 
@@ -65,7 +65,7 @@ def clip_to_chicago_and_save(gdf, name):
     gpkg_filename = f"{name}_chicago.gpkg"
     gdf_chi.to_file(gpkg_filename, layer='tracts', driver="GPKG")
     
-    print(f"✅ {name} done:")
+    print(f" {name} done:")
     print(f"   - Number of Tracts being kept: {len(gdf_chi)}")
     print(f"   - Saved: {csv_filename} & {gpkg_filename}")
     return gdf_chi
@@ -141,10 +141,7 @@ ax.set_axis_off()
 plt.show()
 ```
 
----
-title: "Envrionmental Exposure Index"
-format: html
----
+# For Environmental Exposure Index
 
 ```{python}
 import geopandas as gpd
@@ -158,7 +155,7 @@ import numpy as np
 from rasterstats import zonal_stats
 ```
 
-# Spatial Alignment (CRS + Clipping)
+1. Spatial Alignment (CRS + Clipping)
 ```{python}
 DATA_DIR = Path("data")
 RAW_DIR = DATA_DIR / "raw-data"
@@ -292,7 +289,7 @@ for name, path in RASTERS.items():
 print("\nDone. Everything is aligned to", TARGET_CRS, "and clipped to Chicago.")
 ```
 
-# Extracting Metrics from Aligned Data
+2. Extracting Metrics from Aligned Data
 ```{python}
 tracts = gpd.read_file(DERIVED_DIR / "tracts_chicago_2022.gpkg", layer="tracts")
 roads  = gpd.read_file(DERIVED_DIR / "roads_chicago_2022.gpkg", layer="roads")
@@ -393,7 +390,7 @@ print(tracts[cols].isna().sum())
 print(tracts[cols].describe())
 ```
 
-# Data Cleaning -1
+3. Data Cleaning -1
 ```{python}
 tracts = tracts.dropna(subset=[
     "lst_summer_mean",
@@ -411,7 +408,7 @@ tracts["tri_release_log"] = np.log1p(
 tracts["cold_bad"] = -tracts["lst_winter_mean"]
 ```
 
-# Data Cleaning -2
+4. Data Cleaning -2
 ```{python}
 print("Rows after dropna:", len(tracts))
 
@@ -448,7 +445,7 @@ print("\nInvalid geometries:", (~tracts.is_valid).sum())
 print("Empty geometries:", tracts.geometry.is_empty.sum())
 ```
 
-# Z-Score Standardization
+5. Z-Score Standardization
 ```{python}
 vars_for_index = [
     "lst_summer_mean",
@@ -479,7 +476,7 @@ tracts["env_exposure_index"] = sum(
 print(tracts["env_exposure_index"].describe())
 ```
 
-# Visualize Results
+6. Visualize Results
 ```{python}
 tracts["exposure_percentile"] = (
     tracts["env_exposure_index"]
@@ -494,7 +491,7 @@ tracts.plot(
 )
 ```
 
-# Spatial Join with Community Areas
+7. Spatial Join with Community Areas
 ```{python}
 community = gpd.read_file(RAW_DIR / "Boundaries_-_Community_Areas_20260228.geojson")
 
@@ -511,11 +508,120 @@ tracts = gpd.sjoin(
 )
 ```
 
-
-# Save Final Results
+8. Save Final Results
 ```{python}
 tracts.to_file(DERIVED_DIR / "chicago_env_exposure_index.gpkg", layer="tracts", driver="GPKG")
 
 tracts.drop(columns="geometry").to_csv(DERIVED_DIR / "chicago_env_exposure_index.csv", index=False)
 ```
+
+# Combine 2 index & Visualization
+
+1. Combining two indexes
+```{python}
+socio.columns
+tracts.columns
+
+socio['GEOID'] = socio['GEOID'].astype(str)
+tracts['GEOID'] = tracts['GEOID'].astype(str)
+
+combined = tracts.merge(
+    socio[['GEOID','socio_index']], 
+    on='GEOID', 
+    how='inner'
+)
+combined.columns
+combined.head()
+```
+
+2. Visualization for double indexes scatter plot
+```{python}
+plt.figure(figsize=(8,6))
+
+sns.scatterplot(
+    data=combined,
+    x='socio_index',
+    y='env_exposure_index',
+    alpha=0.6,
+    s=30
+)
+
+sns.regplot(
+    data=combined,
+    x='socio_index',
+    y='env_exposure_index',
+    scatter=False,
+    color='black'
+)
+
+combined['quadrant'] = (
+    (combined['socio_index'] > 0).astype(int)*2 +
+    (combined['env_exposure_index'] > 0).astype(int)
+)
+
+palette = {
+    0: "#d9d9d9",   # LL
+    1: "#80b1d3",   # LH
+    2: "#fdb462",   # HL
+    3: "#e41a1c"    # HH (EJ priority)
+}
+
+sns.scatterplot(
+    data=combined,
+    x='socio_index',
+    y='env_exposure_index',
+    hue='quadrant',
+    palette=palette,
+    alpha=0.7,
+    s=30
+)
+
+plt.axhline(0, color='black', linewidth=1)
+plt.axvline(0, color='black', linewidth=1)
+
+plt.xlabel("Socioeconomic Vulnerability")
+plt.ylabel("Environmental Exposure")
+plt.title("Environmental Exposure vs Socioeconomic Vulnerability")
+
+plt.tight_layout()
+plt.show()
+
+combined[['socio_index','env_exposure_index']].corr()
+```
+
+# Add in community name in combined files
+```{python}
+community = gpd.read_file(DATA_DIR / "Boundaries_-_Community_Areas_20260228.geojson")
+
+# match CRS with tracts (important)
+community = community.to_crs(combined.crs)
+
+# remove any leftover index_right column (prevents join error)
+if "index_right" in combined.columns:
+    combined = combined.drop(columns="index_right")
+
+# spatial join
+combined = gpd.sjoin(combined,
+    community[["community", "geometry"]],
+    how="left",
+    predicate="intersects"
+)
+
+# quick check
+print(combined.head())
+combined.columns
+
+combined.to_file("DATA_CLEAN_DIR / combined.geojson", driver="GeoJSON")
+```
+
+
+
+
+
+
+
+
+
+
+
 
