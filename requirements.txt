@@ -6,3 +6,4 @@ pyogrio
 shapely
 fiona
 rasterio
+rasterstats
