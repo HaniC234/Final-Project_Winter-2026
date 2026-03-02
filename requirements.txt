@@ -5,3 +5,4 @@ geopandas
 pyogrio
 shapely
 fiona
+rasterio
