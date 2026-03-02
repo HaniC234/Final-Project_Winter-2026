@@ -8,3 +8,4 @@ fiona
 rasterio
 rasterstats
 matplotlib
+seaborn
