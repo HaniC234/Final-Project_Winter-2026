@@ -7,3 +7,5 @@ shapely
 fiona
 rasterio
 rasterstats
+matplotlib.pyplot
+matplotlib
