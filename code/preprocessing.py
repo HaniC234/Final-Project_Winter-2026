@@ -6,6 +6,11 @@ import os
 import geopandas as gpd
 from shapely.geometry import Point
 import matplotlib.pyplot as plt
+import numpy as np
+import rasterio
+from rasterio.warp import calculate_default_transform, reproject, Resampling
+from rasterio.mask import mask
+from rasterstats import zonal_stats
 
 print("CWD =", os.getcwd())
 
