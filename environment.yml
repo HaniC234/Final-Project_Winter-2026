@@ -1,0 +1,23 @@
+name: dap
+channels:
+  - defaults
+dependencies:
+  - altair
+  - bs4
+  - fiona
+  - gdal
+  - geopandas
+  - ipykernel
+  - jupyter
+  - matplotlib
+  - pandas
+  - plotnine
+  - pyogrio
+  - scikit-learn
+  - seaborn
+  - shapely
+  - spacy
+  - statsmodels
+  - vega_datasets
+  - streamlit
+prefix: /Users/maggieshi/miniconda3/envs/dap
