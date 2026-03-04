@@ -139,7 +139,7 @@ fig, ax = plt.subplots(figsize=(7,7))
 
 socio.plot(
     column='socio_percentile',
-    cmap='RdBu_r',
+    cmap='YlOrRd',
     linewidth = 0.1,
     legend=True,
     legend_kwds={"label": "Socioeconomic Vulnerability Percentile\n(0 = lowest exposure, 1 = highest exposure)","orientation": "vertical"},
@@ -518,57 +518,72 @@ combined.head()
 
 2. Visualization for double indexes scatter plot
 ```{python}
-plt.figure(figsize=(8,6))
-
-sns.scatterplot(
-    data=combined,
-    x='socio_index',
-    y='env_exposure_index',
-    alpha=0.6,
-    s=30
+#quadrant + label + palette
+combined["quadrant"] = (
+    (combined["socio_index"] > 0).astype(int) * 2 +
+    (combined["env_exposure_index"] > 0).astype(int)
 )
 
-sns.regplot(
-    data=combined,
-    x='socio_index',
-    y='env_exposure_index',
-    scatter=False,
-    color='black'
-)
-
-combined['quadrant'] = (
-    (combined['socio_index'] > 0).astype(int)*2 +
-    (combined['env_exposure_index'] > 0).astype(int)
-)
+quadrant_labels = {
+    0: "Low Socio – Low Exposure(LL)",
+    1: "Low Socio – High Exposure(LH)",
+    2: "High Socio – Low Exposure(HL)",
+    3: "High Socio – High Exposure(HH)"
+}
+combined["quadrant_label"] = combined["quadrant"].map(quadrant_labels)
 
 palette = {
-    0: "#d9d9d9",   # LL
-    1: "#80b1d3",   # LH
-    2: "#fdb462",   # HL
-    3: "#e41a1c"    # HH (EJ priority)
+    "Low Socio – Low Exposure(LL)": "#d9d9d9",
+    "Low Socio – High Exposure(LH)": "#80b1d3",
+    "High Socio – Low Exposure(HL)": "#fdb462",
+    "High Socio – High Exposure(HH)": "#e41a1c"
 }
 
-sns.scatterplot(
-    data=combined,
-    x='socio_index',
-    y='env_exposure_index',
-    hue='quadrant',
-    palette=palette,
-    alpha=0.7,
-    s=30
+#Altair scatter + regression + reference lines
+base = alt.Chart(combined).properties(
+    width=520,   
+    height=520,
+    title="Environmental Exposure vs Socioeconomic Vulnerability"
 )
 
-plt.axhline(0, color='black', linewidth=1)
-plt.axvline(0, color='black', linewidth=1)
+points = base.mark_circle(opacity=0.7, size=30).encode(
+    x=alt.X("socio_index:Q", title="Socioeconomic Vulnerability"),
+    y=alt.Y("env_exposure_index:Q", title="Environmental Exposure"),
+    color=alt.Color(
+        "quadrant_label:N",
+        title="Typology",
+        scale=alt.Scale(domain=list(palette.keys()), range=list(palette.values())),
+        legend=alt.Legend(
+            orient='none',      
+            legendX=10,          
+            legendY=400,         
+            fillColor='white',   
+            padding=10,          
+            strokeColor='gray')  
+    ),
+    tooltip=[
+        alt.Tooltip("quadrant_label:N", title="Typology"),
+        alt.Tooltip("socio_index:Q", title="Socio", format=".3f"),
+        alt.Tooltip("env_exposure_index:Q", title="Exposure", format=".3f"),
+        alt.Tooltip("community:N", title="Community")  
+    ]
+)
 
-plt.xlabel("Socioeconomic Vulnerability")
-plt.ylabel("Environmental Exposure")
-plt.title("Environmental Exposure vs Socioeconomic Vulnerability")
+# regression line 
+reg_line = base.transform_regression(
+    "socio_index", "env_exposure_index"
+).mark_line(color="black").encode(
+    x="socio_index:Q",
+    y="env_exposure_index:Q"
+)
 
-plt.tight_layout()
-plt.show()
+# reference lines at x=0 and y=0
+vline = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="black").encode(x="x:Q")
+hline = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="black").encode(y="y:Q")
 
-combined[['socio_index','env_exposure_index']].corr()
+chart = (points + reg_line + vline + hline)
+
+chart
 ```
 
 # Add in community name in combined files
