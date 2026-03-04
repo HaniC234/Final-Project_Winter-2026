@@ -549,55 +549,8 @@ plt.tight_layout()
 plt.show()
 ```
 
-6. Join to community areas
 
-```{python}
-community_path = RAW_DIR / "Boundaries_-_Community_Areas_20260228.geojson"
-
-if community_path.exists():
-    community = gpd.read_file(community_path).to_crs(env.crs)
-
-    for c in ["index_right"]:
-        if c in env.columns:
-            env = env.drop(columns=c)
-
-    env_ca = gpd.sjoin(env, community[["community", "geometry"]], how="left", predicate="within")
-
-    missing_ca = env_ca["community"].isna().sum()
-    print("\nTracts not assigned to community (within):", missing_ca)
-
-    if missing_ca > 0:
-        unmatched = env_ca[env_ca["community"].isna()].drop(columns=["community"]).copy()
-        matched = env_ca[~env_ca["community"].isna()].copy()
-
-        unmatched = gpd.sjoin(unmatched.drop(columns=["index_right"], errors="ignore"),
-                              community[["community", "geometry"]],
-                              how="left",
-                              predicate="intersects")
-
-        unmatched = unmatched.sort_values("GEOID").drop_duplicates(subset=["GEOID"])
-
-        env_ca = pd.concat([matched, unmatched], ignore_index=True)
-
-    community_summary = (
-        env_ca.dropna(subset=["community"])
-              .groupby("community")
-              .agg(
-                  mean_exposure=("env_exposure_index", "mean"),
-                  p90_exposure=("env_exposure_index", lambda x: np.quantile(x, 0.9)),
-                  n_tracts=("GEOID", "nunique"),
-              )
-              .sort_values("mean_exposure", ascending=False)
-              .reset_index()
-    )
-
-    print("\nTop 10 community areas by mean exposure (tract-average):")
-    print(community_summary.head(10))
-else:
-    print("\nCommunity areas file not found. Skipping community summary.")
-```
-
-7. Final outputs
+6. Final outputs
 
 ```{python}
 env.to_file(DERIVED_DIR / "env__exposure_final.gpkg", layer="tracts", driver="GPKG")
