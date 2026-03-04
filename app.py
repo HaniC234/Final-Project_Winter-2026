@@ -2,195 +2,194 @@ import pandas as pd
 from pathlib import Path
 import os
 import geopandas as gpd
-from shapely.geometry import Point
-import rasterio
-from rasterio.warp import calculate_default_transform, reproject, Resampling
-from rasterio.mask import mask
-from rasterstats import zonal_stats
 import numpy as np
-
-import matplotlib.pyplot as plt
-import seaborn as sns
-
 import streamlit as st
 import pydeck as pdk
 import altair as alt
+import matplotlib.pyplot as plt
 
+st.set_page_config(page_title="Chicago EJ Typology Explorer", layout="wide")
 
-
-st.set_page_config(page_title="Chicago Justice Typology", layout="wide")
+QUAD_CONFIG = {
+    0: {"label": "Low Socio – Low Exposure (LL)", "abbr": "LL", "color": [200, 200, 200], "hex": "#C8C8C8"},
+    1: {"label": "Low Socio – High Exposure (LH)", "abbr": "LH", "color": [102, 194, 165], "hex": "#66C2A5"},
+    2: {"label": "High Socio – Low Exposure (HL)", "abbr": "HL", "color": [252, 141, 98], "hex": "#FC8D62"},
+    3: {"label": "High Socio – High Exposure (HH)", "abbr": "HH", "color": [141, 160, 203], "hex": "#8DA0CB"}
+}
 
 @st.cache_data
-def load_data(path="data/derived-data/combined.geojson"):
+def load_data(path="data/derived/combined.geojson"):
     gdf = gpd.read_file(path)
-    
+
+    if "socio_index" in gdf.columns:
+        gdf["socio_percentile"] = gdf["socio_index"].rank(pct=True)
+    if "env_exposure_index" in gdf.columns:
+        gdf["env_percentile"] = gdf["env_exposure_index"].rank(pct=True)
+        
     if gdf.crs is None or gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(4326)
 
     if gdf["GEOID"].duplicated().any():
-        
-        numeric_cols = ["socio_index", "env_exposure_index", "lst_summer_mean", "road_density"]
-        valid_numeric = [c for c in numeric_cols if c in gdf.columns]
         gdf = gdf.sort_values("GEOID").drop_duplicates(subset=["GEOID"], keep="first")
-
-    return gdf
+    
+    gdf_low_res = gdf.copy()
+    gdf_low_res['geometry'] = gdf_low_res['geometry'].simplify(0.0005, preserve_topology=True)
+    
+    return gdf, gdf_low_res
 
 def assign_quadrant(df, socio_th=0.0, expo_th=0.0):
     socio_hi = df["socio_index"] > socio_th
     expo_hi = df["env_exposure_index"] > expo_th
+    return (socio_hi.astype(int) * 2 + expo_hi.astype(int))
 
-    # 0 LL, 1 LH, 2 HL, 3 HH
-    quad = (socio_hi.astype(int) * 2) + (expo_hi.astype(int) * 1)
-    return quad
+# --- data loading ---
+gdf, gdf_altair = load_data()
 
-# Load
-gdf = load_data()
-st.write("Rows:", len(gdf))
-st.write("CRS:", gdf.crs)
-st.title("Environmental Justice Typology (Chicago Census Tracts)")
+# --- sidebar ---
+with st.sidebar:
+    st.header("Classification Settings")
+    
+    mode = st.radio(
+        "Threshold Mode", 
+        ["Mean", "Median", "Manual"],
+        help="Mean: Uses the city-wide average as the cutoff point; Median: Uses the median (50th percentile ranking) to ensure a more balanced sample distribution; Manual: Custom cutoff value."
+    )
 
-# Sidebar controls
-st.sidebar.header("Typology Controls")
+    if mode == "Mean":
+        st.info("Devision based on **Average (0.0)** of Chicago")
+        socio_th, expo_th = 0.0, 0.0
+    elif mode == "Median":
+        st.info("Devision based on **Median (50th Percentile)** of Chicago")
+        socio_th = gdf["socio_index"].median()
+        expo_th = gdf["env_exposure_index"].median()
+    else:
+        socio_th = st.slider("Socio-Vulnerability Threshold", -3.0, 3.0, 0.0)
+        expo_th = st.slider("Env-Exposure Threshold", -3.0, 3.0, 0.0)
 
-mode = st.sidebar.radio("Threshold mode", ["Standardized Threshold (Mean=0)", "Percentile Threshold"], index=0)
+    show_quads = st.multiselect(
+        "Filter Typologies",
+        options=[0, 1, 2, 3],
+        default=[0, 1, 2, 3],
+        format_func=lambda x: QUAD_CONFIG[x]["label"]
+    )
 
-if mode == "Standardized Threshold (Mean=0)":
-    socio_th = st.sidebar.slider("Socio Vulnerability threshold", -2.0, 2.0, 0.0, 0.1)
-    expo_th  = st.sidebar.slider("Environmental Exposure threshold", -2.0, 2.0, 0.0, 0.1)
-else:
-    socio_p = st.sidebar.slider("Socio Vulnerability percentile (e.g., 75 = top 25%)", 50, 95, 75, 1)
-    expo_p  = st.sidebar.slider("Environmental Exposure percentile", 50, 95, 75, 1)
-    socio_th = float(np.nanpercentile(gdf["socio_index"], socio_p))
-    expo_th  = float(np.nanpercentile(gdf["env_exposure_index"], expo_p))
-    st.sidebar.caption(f"Socio threshold value: {socio_th:.3f}")
-    st.sidebar.caption(f"Exposure threshold value: {expo_th:.3f}")
+# --- data processing ---
+gdf["quadrant"] = assign_quadrant(gdf, socio_th, expo_th)
+gdf["quad_label"] = gdf["quadrant"].map(lambda x: QUAD_CONFIG[x]["label"])
+gdf["quad_abbr"] = gdf["quadrant"].map(lambda x: QUAD_CONFIG[x]["abbr"])
+gdf["fill_color"] = gdf["quadrant"].map(lambda x: QUAD_CONFIG[x]["color"])
 
-show_quads = st.sidebar.multiselect(
-    "Show quadrants",
-    options=[0,1,2,3],
-    default=[0,1,2,3],
-    format_func=lambda q: {0:"LL (Baseline)",1:"LH (High exposure, low vuln)",2:"HL (High vuln, low exposure)",3:"HH (EJ Priority)"}[q]
-)
-
-opacity = st.sidebar.slider("Map opacity", 0.1, 1.0, 0.65, 0.05)
-
-# Compute quadrant + colors
-gdf = gdf.copy()
-
-gdf['socio_index'] = gdf['socio_index'].round(3)
-gdf['env_exposure_index'] = gdf['env_exposure_index'].round(3)
-
-gdf["quadrant"] = assign_quadrant(gdf, socio_th=socio_th, expo_th=expo_th)
-
-# Filter
 gdf_show = gdf[gdf["quadrant"].isin(show_quads)].copy()
+gdf_show['socio_index'] = gdf['socio_index'].round(3)
+gdf_show['env_exposure_index'] = gdf['env_exposure_index'].round(3)
 
-# Color mapping (RGBA)
-color_map = {
-    0: [200, 200, 200],  # LL
-    1: [102, 194, 165],  # LH
-    2: [252, 141, 98],   # HL
-    3: [141, 160, 203],  # HH
-}
-gdf_show["fill_color"] = gdf_show["quadrant"].map(color_map)
+# --- Main page ---
+st.title("Chicago Environmental Justice (EJ) Typology")
 
-# Center map on Chicago
-center_lat = float(gdf.geometry.centroid.y.mean())
-center_lon = float(gdf.geometry.centroid.x.mean())
+tab_interactive, tab_static = st.tabs(["Interactive Map", "Static Maps"])
 
-# Convert to GeoJSON dict for pydeck
-geojson = gdf_show.__geo_interface__
+with tab_interactive:
+    view_state = pdk.ViewState(latitude=41.8781, longitude=-87.6298, zoom=10, pitch=0)
+    
+    layer = pdk.Layer(
+        "GeoJsonLayer",
+        gdf_show,
+        pickable=True,
+        opacity=0.7,
+        get_fill_color="fill_color",
+        get_line_color=[255, 255, 255],
+        line_width_min_pixels=0.5,
+    )
 
-layer = pdk.Layer(
-    "GeoJsonLayer",
-    data=geojson,
-    opacity=opacity,
-    stroked=True,
-    filled=True,
-    get_fill_color="properties.fill_color",
-    get_line_color=[80, 80, 80],
-    line_width_min_pixels=0.5,
-    pickable=True,
-)
+    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, 
+                             tooltip={"text": "Community: {community}\nType: {quad_label}\nSocio Index: {socio_index}\nEnv Index: {env_exposure_index}"}))
 
-view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=9.5)
+    st.markdown("### Typology Legend")
+    leg_cols = st.columns(4)
+    for i, (k, v) in enumerate(QUAD_CONFIG.items()):
+        leg_cols[i].markdown(f"""
+            <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                <div style="width: 20px; height: 20px; background-color: rgb{tuple(v['color'])}; border: 1px solid white; margin-right: 10px;"></div>
+                <span style="font-size: 0.9rem;">{v['label']}</span>
+            </div>
+        """, unsafe_allow_html=True)
 
-tooltip = {
-    "html": """
-        <div style="font-family: sans-serif; padding: 5px;">
-            <b>Community:</b> {community} <br/>
-            <hr style="margin: 5px 0;"/>
-            <b>Socio Vulnerability:</b> {socio_index} <br/>
-            <b>Env Exposure:</b> {env_exposure_index} <br/>
-            <b>EJ Quadrant:</b> {quadrant}
-        </div>
-    """,
-    "style": {
-        "backgroundColor": "rgba(255, 255, 255, 0.9)",
-        "color": "black",
-        "border": "1px solid #777",
-        "zIndex": "10000"
-    }
-}
+with tab_static:
+    st.header("Static Visualization")
+    
+    st.markdown("### Standardized Index Spatial Distribution")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        fig, ax = plt.subplots(figsize=(7, 7)) 
+        
+        gdf.plot(
+            column='socio_percentile', 
+            cmap='YlOrRd', 
+            legend=True, 
+            legend_kwds={
+                'label': "Socioeconomic Percentile",
+                'orientation': "horizontal",
+                'pad': 0.01,    
+                'shrink': 0.6,  
+                'aspect': 30    
+            }, 
+            ax=ax
+        )
+        
+        ax.set_axis_off()
+        ax.set_title("Socioeconomic Vulnerability", fontsize=11, fontweight='bold', pad=5)
+        
+        plt.subplots_adjust(left=0, right=1, top=0.9, bottom=0.1)
+        st.pyplot(fig)
 
-# KPIs
-col1, col2, col3, col4 = st.columns(4)
+    with col2:
+        fig, ax = plt.subplots(figsize=(7, 6.8))
+        
+        gdf.plot(
+            column='env_percentile', 
+            cmap='viridis', 
+            legend=True, 
+            legend_kwds={
+                'label': "Environmental Percentile",
+                'orientation': "horizontal",
+                'pad': 0.01,
+                'shrink': 0.6,
+                'aspect': 30
+            }, 
+            ax=ax
+        )
+        
+        ax.set_axis_off()
+        ax.set_title("Environmental Exposure", fontsize=11, fontweight='bold', pad=5)
+        
+        plt.subplots_adjust(left=0, right=1, top=0.9, bottom=0.1)
+        st.pyplot(fig)
 
-total = len(gdf)
-hh = int((gdf["quadrant"] == 3).sum())
-hh_share = hh / total if total else 0
-corr = float(gdf[["socio_index","env_exposure_index"]].corr().iloc[0,1])
+    st.divider()
 
-col1.metric("Total tracts", f"{total}")
-col2.metric("HH (EJ Priority)", f"{hh}")
-col3.metric("HH share", f"{hh_share:.1%}")
-col4.metric("Corr(socio, exposure)", f"{corr:.3f}")
+    st.subheader("Typology Cross-Analysis (Scatter Plot)")
+    domain_labels = [v["label"] for v in QUAD_CONFIG.values()]
+    range_colors = [v["hex"] for v in QUAD_CONFIG.values()]
+    
+    scatter = alt.Chart(gdf).mark_circle(opacity=0.6, size=50).encode(
+        x=alt.X("socio_index:Q", title="Socioeconomic Vulnerability (std)"),
+        y=alt.Y("env_exposure_index:Q", title="Environmental Exposure (std)"),
+        color=alt.Color("quad_label:N", scale=alt.Scale(domain=domain_labels, range=range_colors),
+                        legend=alt.Legend(orient='none', title="Quadrant:", legendX=10, legendY=10, fillColor='white', padding=5, labelLimit=300,)),
+        tooltip=["community:N", "socio_index:Q", "env_exposure_index:Q"]
+    ).properties(width=700, height=450)
+    
+    vline = alt.Chart(pd.DataFrame({'x': [socio_th]})).mark_rule(color='black', strokeDash=[3,3]).encode(x='x:Q')
+    hline = alt.Chart(pd.DataFrame({'y': [expo_th]})).mark_rule(color='black', strokeDash=[3,3]).encode(y='y:Q')
+    
+    st.altair_chart(scatter + vline + hline, use_container_width=True)
 
-# Map
-st.subheader("Interactive Map")
-st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip))
+st.divider()
 
-# Scatter with highlighted quadrant
-st.subheader("Exposure vs Vulnerability (Scatter)")
-plot_df = gdf.copy()
-plot_df["quad_label"] = plot_df["quadrant"].map({
-    0:"LL", 1:"LH", 2:"HL", 3:"HH"
-})
+with st.expander("View Community Rankings (Top 20 High-Exposure)"):
+    top_20 = gdf.sort_values("env_exposure_index", ascending=False).head(20)
+    st.dataframe(top_20[["community", "socio_index", "env_exposure_index", "quad_label"]])
 
-color_map_hex = {
-    0: "#C8C8C8",
-    1: "#66C2A5",
-    2: "#FC8D62",
-    3: "#8DA0CB"
-}
-domain = ["LL", "LH", "HL", "HH"]
-range_ = ["#C8C8C8", "#66C2A5", "#FC8D62", "#8DA0CB"]
-
-scatter = alt.Chart(plot_df).mark_circle(opacity=0.55, size=45).encode(
-    x=alt.X("socio_index:Q", title="Socioeconomic Vulnerability (std)"),
-    y=alt.Y("env_exposure_index:Q", title="Environmental Exposure (std)"),
-    color=alt.Color("quad_label:N", 
-                    title="Quadrant",
-                    scale=alt.Scale(domain=domain, range=range_)),
-    tooltip=["GEOID:N","socio_index:Q","env_exposure_index:Q","quad_label:N"]
-).properties(height=350)
-
-vline = alt.Chart(pd.DataFrame({'x': [0]})).mark_rule(color='lightblue', strokeDash=[3,3]).encode(x='x:Q')
-hline = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(color='lightblue', strokeDash=[3,3]).encode(y='y:Q')
-
-final_chart = (scatter + vline + hline).properties(
-    width=400,
-    height=350,
-    title="Environmental Justice Quadrant Analysis"
-)
-
-st.altair_chart(final_chart, use_container_width=True)
-
-# Table
-st.subheader("Tracts in Selected Quadrants (Top 20 by Environmental Exposure)")
-table = gdf_show[["GEOID","NAME","socio_index","env_exposure_index","quadrant"]].copy()
-table = table.sort_values("env_exposure_index", ascending=False).head(20)
-st.dataframe(table, use_container_width=True)
-
-
-gdf_show.columns
+st.caption("Data Source: Chicago Census Tracts - EJ Analysis Framework")
