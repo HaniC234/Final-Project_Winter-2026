@@ -1,4 +1,3 @@
-README.md
 # Chicago Environmental Justice Analysis
 
 This project processes and visualizes socioeconomic vulnerability and environmental exposure data across Chicago census tracts.
