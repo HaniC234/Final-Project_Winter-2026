@@ -25,10 +25,10 @@ data/
     renter_clean.csv      # Clean Renter data -- Socio Index
     housing_age_clean.csv     # Clean Housing age data -- Socio Index
     home_value_clean.csv      # Clean Home value data -- Socio Index
-    combined.geojson      # Combined data od both indexes
+    combined.geojson      # Combined data of both indexes
 
 code/
-  preprocessing.py    # Proprocessing data for both indexs
+  preprocessing.py    # Proprocessing data for both indexes
 ```
 
 ## Usage
