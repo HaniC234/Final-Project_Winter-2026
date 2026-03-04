@@ -188,8 +188,15 @@ with tab_static:
 
 st.divider()
 
-with st.expander("View Community Rankings (Top 20 High-Exposure)"):
+with st.expander("View Community Rankings (Top 20 High-Environmental-Exposure)"):
     top_20 = gdf.sort_values("env_exposure_index", ascending=False).head(20)
-    st.dataframe(top_20[["community", "socio_index", "env_exposure_index", "quad_label"]])
+    st.dataframe(top_20[["community", "socio_index", "env_exposure_index", "quad_label"]],
+                 column_config={
+                     "community": "Community Name",
+                     "socio_index": "Socio Score",
+                     "env_exposure_index": "Env Score",
+                     "quad_label": "Typology Classification" },
+                use_container_width=True,
+                hide_index=True)
 
 st.caption("Data Source: Chicago Census Tracts - EJ Analysis Framework")
