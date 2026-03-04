@@ -34,12 +34,12 @@ code/
 
 ## Usage
 
-1. Run preprocessing to filter data:
+1. Run preprocessing to clean data:
    ```bash
    python code/preprocessing.py
    ```
 
-2. Generate the fire perimeter plot:
+2. Run qmd file that generate all static plot and streamlit:
    ```bash
-   python code/plot_fires.py
+   python final_project.qmd
    ```
