@@ -516,7 +516,32 @@ combined.columns
 combined.head()
 ```
 
-2. Visualization for double indexes scatter plot
+2. Add in community name in combined files
+```{python}
+community = gpd.read_file(DATA_DIR / "Boundaries_-_Community_Areas_20260228.geojson")
+
+# match CRS with tracts (important)
+community = community.to_crs(combined.crs)
+
+# remove any leftover index_right column (prevents join error)
+if "index_right" in combined.columns:
+    combined = combined.drop(columns="index_right")
+
+# spatial join
+combined = gpd.sjoin(combined,
+    community[["community", "geometry"]],
+    how="left",
+    predicate="intersects"
+)
+
+# quick check
+print(combined.head())
+combined.columns
+
+combined.to_file("DATA_CLEAN_DIR / combined.geojson", driver="GeoJSON")
+```
+
+3. Visualization for double indexes scatter plot
 ```{python}
 #quadrant + label + palette
 combined["quadrant"] = (
@@ -584,31 +609,6 @@ hline = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="black").encode(y="y
 chart = (points + reg_line + vline + hline)
 
 chart
-```
-
-# Add in community name in combined files
-```{python}
-community = gpd.read_file(DATA_DIR / "Boundaries_-_Community_Areas_20260228.geojson")
-
-# match CRS with tracts (important)
-community = community.to_crs(combined.crs)
-
-# remove any leftover index_right column (prevents join error)
-if "index_right" in combined.columns:
-    combined = combined.drop(columns="index_right")
-
-# spatial join
-combined = gpd.sjoin(combined,
-    community[["community", "geometry"]],
-    how="left",
-    predicate="intersects"
-)
-
-# quick check
-print(combined.head())
-combined.columns
-
-combined.to_file("DATA_CLEAN_DIR / combined.geojson", driver="GeoJSON")
 ```
 
 
