@@ -1,23 +1,22 @@
-name: dap
+name: chicago_ej
 channels:
-  - defaults
+  - conda-forge
 dependencies:
-  - altair
-  - bs4
-  - fiona
-  - gdal
-  - geopandas
-  - ipykernel
-  - jupyter
-  - matplotlib
+  - python=3.11
   - pandas
-  - plotnine
-  - pyogrio
-  - scikit-learn
-  - seaborn
+  - geopandas
+  - altair
   - shapely
-  - spacy
-  - statsmodels
-  - vega_datasets
-  - streamlit
-prefix: /Users/maggieshi/miniconda3/envs/dap
+  - matplotlib
+  - jupyterlab
+  - pip
+  - numpy
+  - rasterio
+  - rasterstats
+  - pyproj
+  - fiona
+  - rtree
+  - jupyter
+
+  - pip:
+  - quarto
