@@ -19,6 +19,14 @@ data/
     housing_age_24.csv     # Housing age data -- Socio Index
     home_value_24.csv      # Home value data -- Socio Index
     Boundaries_Chicago.geojson    # Boundary tract data of Chicago
+    tl_2023/17_tract/      # Shape file for clipping
+      tl_2023_17_tract.cpg
+      tl_2023_17_tract.dbf
+      tl_2023_17_tract.prj
+      tl_2023_17_tract.shp
+      tl_2023_17_tract.shx
+      tl_2023_17_tract.shp.ea.iso.xml
+      tl_2023_17_tract.shp.iso.xml
 
   derived-data/       # Filtered data and output plots
     income_clean.csv      # Clean Income data -- Socio Index
