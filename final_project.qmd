@@ -423,7 +423,11 @@ env.plot(
     legend=True,
     linewidth=0.05,
     edgecolor="black",
-    ax=ax
+    ax=ax,
+    legend_kwds={
+        "label": "Environmental Exposure Percentile\n(0 = lowest exposure, 1 = highest exposure)",
+        "orientation": "vertical"
+    }
 )
 
 ax.set_title("Environmental Exposure Index Percentile by Census Tract\nChicago")
