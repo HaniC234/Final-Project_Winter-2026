@@ -13,7 +13,7 @@ from shapely.geometry import Point
 import numpy as np
 
 import matplotlib.pyplot as plt
-import seaborn as sns
+import altair as alt
 
 import rasterio
 from rasterio.warp import calculate_default_transform, reproject, Resampling
@@ -617,9 +617,9 @@ socio.columns
 tracts.columns
 
 socio['GEOID'] = socio['GEOID'].astype(str)
-tracts['GEOID'] = tracts['GEOID'].astype(str)
+env['GEOID'] = env['GEOID'].astype(str)
 
-combined = tracts.merge(
+combined = env.merge(
     socio[['GEOID','socio_index']], 
     on='GEOID', 
     how='inner'
