@@ -18,7 +18,7 @@ QUAD_CONFIG = {
 }
 
 @st.cache_data
-def load_data(path="data/derived-data/combined.geojson"):
+def load_data(path="../data/derived-data/combined.geojson"):
     gdf = gpd.read_file(path)
 
     if "socio_index" in gdf.columns:
