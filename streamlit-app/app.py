@@ -8,6 +8,9 @@ import pydeck as pdk
 import altair as alt
 import matplotlib.pyplot as plt
 
+print("CWD:", os.getcwd())
+print("app.py:", Path(__file__).resolve())
+
 st.set_page_config(page_title="Chicago EJ Typology Explorer", layout="wide")
 
 QUAD_CONFIG = {
