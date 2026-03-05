@@ -31,15 +31,7 @@ def load_data():
     data_dir = root / "data" / "derived-data"
     path = data_dir / "combined.geojson"
 
-    # Debug (delete later if you want)
-    st.write("Repo root:", str(root))
-    st.write("Looking for:", str(path))
-    st.write("data_dir exists:", data_dir.exists())
-    if data_dir.exists():
-        st.write("Files in derived-data:", [p.name for p in data_dir.iterdir()])
-    st.write("combined.geojson exists:", path.exists())
-
-    # Read
+# Read
     gdf = gpd.read_file(path)
 
     # Percentiles (for static maps)
@@ -196,7 +188,7 @@ with tab_static:
         st.pyplot(fig)
 
     with col2:
-        fig, ax = plt.subplots(figsize=(7, 6.8))
+        fig, ax = plt.subplots(figsize=(7, 7))
         gdf.plot(
             column="env_percentile",
             cmap="viridis",
