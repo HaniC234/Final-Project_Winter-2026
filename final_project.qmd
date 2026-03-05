@@ -1,0 +1,724 @@
+---
+title: 'Final Project'
+author: 'Cassie & Hani'
+format:
+  pdf:
+    include-in-header:
+      text: |
+        \usepackage{fvextra}
+        \usepackage{xcolor}
+        \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+        \makeatletter
+        \def\verbatim@nolig@list{\do`\do\<\do\>\do\,\do\'\do\-}
+        \makeatother
+        \fvset{breaklines=true, breakanywhere=true}
+---
+
+0. Loading
+```{python}
+import pandas as pd
+from pathlib import Path
+import os
+import geopandas as gpd
+from shapely.geometry import Point
+import numpy as np
+
+import matplotlib.pyplot as plt
+import altair as alt
+
+import rasterio
+from rasterio.warp import calculate_default_transform, reproject, Resampling
+from rasterio.mask import mask
+from rasterstats import zonal_stats
+
+from IPython.display import Image
+```
+
+# For SocioEconomic Vulnerability Index
+
+```{python}
+# 0. Preprocessing
+
+DATA_DIR = Path("data/raw-data")
+
+income = pd.read_csv(DATA_DIR / "income_24.csv")
+renter = pd.read_csv(DATA_DIR / "renter_24.csv")
+housing_age = pd.read_csv(DATA_DIR / "housing_age_24.csv")
+home_value = pd.read_csv(DATA_DIR / "home_value_24.csv")
+
+### cleaning the geo id
+def clean_geoid(df):
+    possible_cols = ['GEO_ID', 'geo_id', 'index']
+    
+    for col in possible_cols:
+        if col in df.columns:
+            df['GEOID'] = df[col].astype(str)
+            break
+
+    # remove '1400000US'
+    df['GEOID'] = df['GEOID'].str.replace('1400000US', '', regex=False)
+    df['GEOID'] = df['GEOID'].str.zfill(11)
+
+    return df
+
+income = clean_geoid(income)
+renter = clean_geoid(renter)
+housing_age = clean_geoid(housing_age)
+home_value = clean_geoid(home_value)
+
+### income
+income.head()
+income = income.rename(columns = {'B19013_001E': 'median_income'})
+income['median_income'].dtype
+income['median_income'] = pd.to_numeric(income['median_income'], errors='coerce')
+
+income = income.dropna(subset = 'median_income')
+income = income[['GEOID', 'NAME', 'median_income']]
+
+income['median_income'].describe()
+income.head()
+
+### renter share
+renter.head()
+renter = renter.rename(columns={
+    'B25003_001E': 'total_units',
+    'B25003_003E': 'renter_units'
+})
+print(renter[['total_units','renter_units']].dtypes)
+renter['total_units'] = pd.to_numeric(renter['total_units'], errors='coerce')
+renter['renter_units'] = pd.to_numeric(renter['renter_units'], errors='coerce')
+print(renter[['total_units','renter_units']].dtypes)
+
+renter = renter.dropna(subset=['total_units', 'renter_units'])
+renter = renter[renter['total_units'] > 0]
+renter['renter_share'] = renter['renter_units'] / renter['total_units']
+renter = renter[['GEOID', 'NAME', 'total_units', 'renter_units', 'renter_share']]
+
+print(renter['renter_share'].describe())
+renter.head()
+
+### housing age
+for col in housing_age.columns:
+    if col not in ['GEOID', 'NAME'] and housing_age[col].dtype == 'object':
+        housing_age[col] = pd.to_numeric(
+            housing_age[col].astype(str)
+                             .str.replace(',', '', regex=False)
+                             .str.strip(),
+            errors='coerce'
+        )
+housing_age.head()
+
+housing_age = housing_age.rename(columns={
+    'B25034_001E': 'total_units',
+    'B25034_008E': 'built_1960_69',
+    'B25034_009E': 'built_1950_59',
+    'B25034_010E': 'built_1940_49',
+    'B25034_011E': 'built_1939_before'
+})
+
+housing_age['old_units'] = (
+    housing_age['built_1960_69'] +
+    housing_age['built_1950_59'] +
+    housing_age['built_1940_49'] +
+    housing_age['built_1939_before']
+)
+housing_age = housing_age.dropna(subset = 'old_units')
+
+housing_age = housing_age[housing_age['total_units'] > 0]
+housing_age['old_housing_share'] = ((housing_age['old_units'] 
+  / housing_age['total_units']))
+
+housing_age = (housing_age[['GEOID', 'NAME', 'total_units', 
+  'old_units', 'old_housing_share']])
+print(housing_age['old_housing_share'].describe())
+housing_age.head()
+
+### home value
+home_value.head()
+home_value = home_value.rename(columns = {'B25077_001E': 'median_home_value'})
+
+home_value['median_home_value'] = (pd.to_numeric(home_value['median_home_value'], 
+  errors='coerce'))
+home_value = home_value.dropna(subset = 'median_home_value')
+
+home_value = home_value[['GEOID', 'NAME', 'median_home_value']]
+print(home_value['median_home_value'].describe())
+home_value.head()
+
+income.to_csv('income_clean.csv', index=False)
+renter.to_csv('renter_clean.csv', index=False)
+housing_age.to_csv('housing_age_clean.csv', index=False)
+home_value.to_csv('home_value_clean.csv', index=False)
+```
+
+1. Reading in all the file
+```{python}
+DATA_CLEAN_DIR = Path("data/derived-data")
+DATA_DIR = Path("data/raw-data")
+
+income = pd.read_csv(DATA_CLEAN_DIR / "income_clean.csv")
+renter = pd.read_csv(DATA_CLEAN_DIR / "renter_clean.csv")
+housing_age = pd.read_csv(DATA_CLEAN_DIR / "housing_age_clean.csv")
+home_value = pd.read_csv(DATA_CLEAN_DIR / "home_value_clean.csv")
+
+tracts = gpd.read_file(DATA_DIR / 'tl_2023_17_tract'/ "tl_2023_17_tract.shp")
+
+```
+
+2. Clip All Dataframe into Chicago Shape
+```{python}
+tracts = gpd.read_file(DATA_DIR / 'tl_2023_17_tract'/ "tl_2023_17_tract.shp")
+tracts["GEOID"] = tracts["GEOID"].astype(str)
+cook_tracts = tracts[tracts["COUNTYFP"] == "031"].copy()
+
+def make_it_geo(df, base_map):
+    df["GEOID"] = df["GEOID"].astype(str)
+    return base_map.merge(df, on="GEOID", how="inner")
+
+gdf_income = make_it_geo(income, cook_tracts)
+gdf_renter = make_it_geo(renter, cook_tracts)
+gdf_age = make_it_geo(housing_age, cook_tracts)
+gdf_home = make_it_geo(home_value, cook_tracts)
+
+city = gpd.read_file(DATA_DIR / "Boundaries_Chicago.geojson")
+city = city.to_crs(gdf_income.crs)
+city_union = city.geometry.unary_union
+
+def clip_to_chicago_and_save(gdf, name):
+    gdf = gdf.to_crs(city.crs)
+    
+    gdf_chi = gdf[gdf.geometry.centroid.within(city_union)].copy()
+    
+    # as csv
+    cols_to_save = [c for c in gdf_chi.columns if c != 'geometry']
+    csv_filename = f"{name}_chicago.csv"
+    gdf_chi[cols_to_save].to_csv(csv_filename, index=False)
+    
+    # as gpkg
+    gdf_chi.crs = "EPSG:4326" 
+    gpkg_filename = f"{name}_chicago.gpkg"
+    gdf_chi.to_file(gpkg_filename, layer='tracts', driver="GPKG")
+    
+    print(f" {name} done:")
+    print(f"   - Number of Tracts being kept: {len(gdf_chi)}")
+    print(f"   - Saved: {csv_filename} & {gpkg_filename}")
+    return gdf_chi
+
+gdfs = ({"income_24c": gdf_income, "renter_24c": gdf_renter, 
+  "house_age_24c": gdf_age, "home_value_24c": gdf_home})
+chicago_gdfs = {} 
+
+for name, target_gdf in gdfs.items():
+    chicago_gdfs[name] = clip_to_chicago_and_save(target_gdf, name)
+
+income_chi = chicago_gdfs["income_24c"]
+renter_chi = chicago_gdfs["renter_24c"]
+age_chi = chicago_gdfs["house_age_24c"]
+home_value_chi = chicago_gdfs["home_value_24c"]
+
+```
+
+3. Standardizing all variables
+```{python}
+def zscore(series):
+    return (series - series.mean()) / series.std()
+
+income_chi['income_z'] = -zscore(income_chi['median_income'])
+renter_chi['renter_z'] = zscore(renter_chi['renter_share'])
+age_chi['age_z'] = zscore(age_chi['old_housing_share'])
+home_value_chi['home_value_z'] = -zscore(home_value_chi['median_home_value'])
+
+```
+
+4. Sanity Check for each variable
+```{python}
+print(income_chi['income_z'].describe())
+print(renter_chi['renter_z'].describe())
+print(age_chi['age_z'].describe())
+print(home_value_chi['home_value_z'].describe())
+```
+
+5. Setting up the Socio Index
+```{python}
+socio = income_chi[['GEOID', 'geometry', 'income_z']].merge(
+    renter_chi[['GEOID', 'renter_z']],
+    on='GEOID', how = 'inner').merge(
+    age_chi[['GEOID', 'age_z']],
+    on='GEOID', how = 'inner').merge(
+    home_value_chi[['GEOID', 'home_value_z']],
+    on='GEOID', how = 'inner')
+
+socio['socio_index'] = (
+    2 * socio['income_z'] +
+    0.5 * socio['renter_z'] +
+    0.5 * socio['age_z'] +
+    2 * socio['home_value_z']) / 5
+
+socio['socio_index'].describe()
+```
+
+6. Mapping socio vulnerability index
+```{python}
+socio["socio_percentile"] = (
+    socio["socio_index"]
+    .rank(pct=True)
+)
+
+max_abs = abs(socio['socio_index']).max()
+fig, ax = plt.subplots(figsize=(7,7))
+
+socio.plot(
+    column='socio_percentile',
+    cmap='YlOrRd',
+    linewidth = 0.1,
+    legend=True,
+    legend_kwds=({"label": "Socioeconomic Vulnerability Percentile"
+      "\n(0 = lowest exposure, 1 = highest exposure)","orientation": "vertical"}),
+    ax=ax
+)
+
+ax.set_title("Socioeconomic Vulnerability Index Percentile by Census Tract"
+    "\nChicago, IL",
+    fontsize=14,
+    pad=12)
+
+ax.set_axis_off()
+
+plt.tight_layout()
+plt.show()
+```
+
+# For Environmental Exposure Index
+
+1. Pre-processing (CRS + Clipping)
+```{python}
+ENV_RAW_DIR = Path("data/raw-data")
+ENV_DERIVED_DIR = Path("data/derived-data")
+ENV_DERIVED_DIR.mkdir(parents=True, exist_ok=True)
+
+TARGET_CRS = "EPSG:3435"
+
+TRACTS_PATH  = ENV_RAW_DIR / "tl_2022_17_tract.shp"
+CHICAGO_PATH = ENV_RAW_DIR / "Boundaries_Chicago.geojson"
+ROADS_PATH   = ENV_RAW_DIR / "tl_2022_17_prisecroads.shp"
+TRI_CSV_PATH = ENV_RAW_DIR / "EPA_TRI_IL_2022.csv"
+
+RASTERS = {
+    "lst_summer":  ENV_RAW_DIR / "chicago_summer_LST.tif",
+    "lst_winter":  ENV_RAW_DIR / "chicago_winter_LST.tif",
+    "ndvi_summer": ENV_RAW_DIR / "chicago_summer_NDVI.tif",
+    "impervious":  ENV_RAW_DIR / "chicago_impervious.tif",
+}
+
+OUT_TRACTS_GPKG = ENV_DERIVED_DIR / "env__tracts_chicago_2022.gpkg"
+OUT_ROADS_GPKG  = ENV_DERIVED_DIR / "env__roads_chicago_2022.gpkg"
+OUT_TRI_GPKG    = ENV_DERIVED_DIR / "env__tri_chicago_2022.gpkg"
+
+def _drop_empty(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    return gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty].copy()
+
+def _fix_geom(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    gdf = gdf.copy()
+    gdf["geometry"] = gdf.geometry.make_valid()
+    return gdf
+
+def _dissolve_to_single_polygon(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    return gdf.dissolve()
+
+def _reproject_and_clip_raster_to_mask(
+    src_path: Path,
+    dst_path: Path,
+    mask_gdf: gpd.GeoDataFrame,
+    target_crs: str = TARGET_CRS
+) -> None:
+    """
+    Reproject raster to target CRS, then clip to mask geometry.
+    Writes GeoTIFF to dst_path.
+    """
+    with rasterio.open(src_path) as src:
+        if src.crs is None:
+            raise ValueError(f"Raster has no CRS: {src_path}")
+
+        transform, width, height = calculate_default_transform(
+            src.crs, target_crs, src.width, src.height, *src.bounds
+        )
+
+        dst_meta = src.meta.copy()
+        dst_meta.update({
+            "crs": target_crs,
+            "transform": transform,
+            "width": width,
+            "height": height
+        })
+
+        tmp_path = ENV_DERIVED_DIR / f"__tmp_reproject_{src_path.stem}.tif"
+        with rasterio.open(tmp_path, "w", **dst_meta) as dst:
+            for i in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, i),
+                    destination=rasterio.band(dst, i),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=transform,
+                    dst_crs=target_crs,
+                    resampling=Resampling.bilinear,
+                )
+
+    with rasterio.open(tmp_path) as reproj:
+        geoms = list(mask_gdf.geometry)
+        out_img, out_transform = mask(reproj, geoms, crop=True)
+        out_meta = reproj.meta.copy()
+        out_meta.update({
+            "height": out_img.shape[1],
+            "width": out_img.shape[2],
+            "transform": out_transform
+        })
+
+    with rasterio.open(dst_path, "w", **out_meta) as out:
+        out.write(out_img)
+
+    try:
+        tmp_path.unlink()
+    except OSError:
+        pass
+
+def _add_zonal_mean(
+    gdf: gpd.GeoDataFrame, 
+    raster_path: Path, 
+    out_col: str) -> gpd.GeoDataFrame:
+    zs = zonal_stats(gdf, raster_path, stats=["mean"], all_touched=False)
+    gdf[out_col] = [d["mean"] for d in zs]
+    return gdf
+
+
+env_tracts = _fix_geom(_drop_empty(gpd.read_file(TRACTS_PATH)))
+env_chicago = _fix_geom(_drop_empty(gpd.read_file(CHICAGO_PATH)))
+
+env_tracts = env_tracts.to_crs(TARGET_CRS)
+env_chicago = env_chicago.to_crs(TARGET_CRS)
+
+env_chicago_poly = _dissolve_to_single_polygon(env_chicago)
+env_tracts_chicago = gpd.clip(env_tracts, env_chicago_poly)
+print("Chicago tracts:", len(env_tracts_chicago))
+
+env_roads = _fix_geom(_drop_empty(gpd.read_file(ROADS_PATH))).to_crs(TARGET_CRS)
+env_roads_chicago = gpd.clip(env_roads, env_chicago_poly)
+print("Road segments (clipped):", len(env_roads_chicago))
+
+env_tri = pd.read_csv(TRI_CSV_PATH)
+env_tri = env_tri.dropna(subset=["12. LATITUDE", "13. LONGITUDE"]).copy()
+
+env_tri_gdf = gpd.GeoDataFrame(
+    env_tri,
+    geometry=gpd.points_from_xy(env_tri["13. LONGITUDE"], env_tri["12. LATITUDE"]),
+    crs="EPSG:4326"
+).to_crs(TARGET_CRS)
+
+env_tri_gdf = gpd.clip(env_tri_gdf, env_chicago_poly)
+print("TRI points (clipped):", len(env_tri_gdf))
+
+env_tracts_chicago.to_file(OUT_TRACTS_GPKG, layer="tracts", driver="GPKG")
+env_roads_chicago.to_file(OUT_ROADS_GPKG, layer="roads", driver="GPKG")
+env_tri_gdf.to_file(OUT_TRI_GPKG, layer="tri", driver="GPKG")
+
+
+for name, path in RASTERS.items():
+    out_path = ENV_DERIVED_DIR / f"env__{name}_3435_clip.tif"
+    _reproject_and_clip_raster_to_mask(path, out_path, env_chicago_poly, target_crs=TARGET_CRS)
+
+print("Rasters reprojected & clipped to", TARGET_CRS)
+
+
+env_tracts = gpd.read_file(OUT_TRACTS_GPKG, layer="tracts")
+env_roads  = gpd.read_file(OUT_ROADS_GPKG, layer="roads")
+env_tri    = gpd.read_file(OUT_TRI_GPKG, layer="tri")
+
+env_tracts = _add_zonal_mean(env_tracts, ENV_DERIVED_DIR / "env__lst_summer_3435_clip.tif", "lst_summer_mean")
+env_tracts = _add_zonal_mean(env_tracts, ENV_DERIVED_DIR / "env__lst_winter_3435_clip.tif", "lst_winter_mean")
+env_tracts = _add_zonal_mean(env_tracts, ENV_DERIVED_DIR / "env__ndvi_summer_3435_clip.tif", "ndvi_mean")
+env_tracts = _add_zonal_mean(env_tracts, ENV_DERIVED_DIR / "env__impervious_3435_clip.tif", "impervious_mean")
+
+env_roads_x = gpd.overlay(
+    env_roads[["geometry"]],
+    env_tracts[["GEOID", "geometry"]],
+    how="intersection"
+)
+env_roads_x["road_len_ft"] = env_roads_x.geometry.length
+
+env_road_sum = env_roads_x.groupby("GEOID")["road_len_ft"].sum().reset_index()
+
+env_tracts["tract_area_ft2"] = env_tracts.geometry.area
+env_tracts = env_tracts.merge(env_road_sum, on="GEOID", how="left")
+env_tracts["road_len_ft"] = env_tracts["road_len_ft"].fillna(0)
+env_tracts["road_density"] = env_tracts["road_len_ft"] / env_tracts["tract_area_ft2"]
+
+env_tri = env_tri.copy()
+env_tri["total_releases"] = pd.to_numeric(env_tri["107. TOTAL RELEASES"], errors="coerce").fillna(0)
+
+env_tri_join = gpd.sjoin(
+    env_tri,
+    env_tracts[["GEOID", "geometry"]],
+    how="inner",
+    predicate="within"
+)
+
+env_tri_summary = (
+    env_tri_join.groupby("GEOID")
+    .agg(
+        tri_release_total=("total_releases", "sum"),
+        tri_facility_count=("2. TRIFD", "nunique")
+    )
+    .reset_index()
+)
+
+env_tracts = env_tracts.merge(env_tri_summary, on="GEOID", how="left")
+env_tracts["tri_release_total"] = env_tracts["tri_release_total"].fillna(0)
+env_tracts["tri_facility_count"] = env_tracts["tri_facility_count"].fillna(0)
+
+env_tracts.to_file(ENV_DERIVED_DIR / "env__metrics_tracts.gpkg", layer="tracts", driver="GPKG")
+env_tracts.drop(columns="geometry").to_csv(ENV_DERIVED_DIR / "env__metrics_tracts.csv", index=False)
+
+print("\n✅ Done. Environmental metrics saved to:")
+print(" -", (ENV_DERIVED_DIR / "env__metrics_tracts.gpkg"))
+print(" -", (ENV_DERIVED_DIR / "env__metrics_tracts.csv"))
+```
+
+2. Load tract-level environmental metrics
+
+```{python}
+DERIVED_DIR = Path("data/derived-data")
+RAW_DIR = Path("data/raw-data")
+
+env = gpd.read_file(DERIVED_DIR / "env__metrics_tracts.gpkg", layer="tracts")
+
+expected_cols = [
+    "GEOID",
+    "lst_summer_mean",
+    "lst_winter_mean",
+    "ndvi_mean",
+    "impervious_mean",
+    "road_density",
+    "tri_release_total",
+    "tri_facility_count",
+]
+missing = [c for c in expected_cols if c not in env.columns]
+
+print("\nRows:", len(env))
+print("\nBasic summary (selected columns):")
+print(env[["lst_summer_mean","ndvi_mean","impervious_mean","road_density",
+  "tri_release_total"]].describe())
+```
+
+3. Cleaning + transformations
+
+```{python}
+env = env.dropna(subset=["lst_summer_mean", "ndvi_mean", "impervious_mean"]).copy()
+env["ndvi_bad"] = -env["ndvi_mean"]
+env["tri_release_log"] = np.log1p(env["tri_release_total"])
+
+print("\nAfter cleaning, rows:", len(env))
+```
+
+4. Z-score standardization + weighted exposure index
+
+```{python}
+vars_for_index = [
+    "lst_summer_mean",
+    "ndvi_bad",
+    "impervious_mean",
+    "road_density",
+    "tri_release_log",
+]
+
+for v in vars_for_index:
+    env[f"z_{v}"] = (env[v] - env[v].mean()) / env[v].std()
+
+weights = {
+    "z_lst_summer_mean": 0.25,
+    "z_ndvi_bad": 0.125,
+    "z_impervious_mean": 0.125,
+    "z_road_density": 0.25,
+    "z_tri_release_log": 0.25,
+}
+
+env["env_exposure_index"] = sum(env[k] * w for k, w in weights.items())
+
+env["exposure_percentile"] = env["env_exposure_index"].rank(pct=True)
+
+print("\nExposure index summary:")
+print(env["env_exposure_index"].describe())
+```
+
+5. Visualization
+
+```{python}
+fig, ax = plt.subplots(figsize=(7,7))
+
+env.plot(
+    column="exposure_percentile",
+    cmap="viridis",
+    legend=True,
+    linewidth=0.05,
+    edgecolor="black",
+    ax=ax,
+    legend_kwds={
+        "label": "Environmental Exposure Percentile\n(0 = lowest exposure, 1 = highest exposure)",
+        "orientation": "vertical"
+    }
+)
+
+ax.set_title("Environmental Exposure Index Percentile by Census Tract\nChicago")
+ax.set_axis_off()
+
+plt.tight_layout()
+plt.show()
+```
+
+
+6. Final outputs
+
+```{python}
+env.to_file(DERIVED_DIR / "env__exposure_final.gpkg", layer="tracts", driver="GPKG")
+env.drop(columns="geometry").to_csv(DERIVED_DIR / "env__exposure_final.csv", index=False)
+
+print("\n✅ Saved final outputs:")
+print(" -", DERIVED_DIR / "env__exposure_final.gpkg")
+print(" -", DERIVED_DIR / "env__exposure_final.csv")
+```
+
+
+# Combine 2 index & Visualization
+
+1. Combining two indexes
+```{python}
+socio.columns
+tracts.columns
+
+socio['GEOID'] = socio['GEOID'].astype(str)
+env['GEOID'] = env['GEOID'].astype(str)
+
+combined = env.merge(
+    socio[['GEOID','socio_index']], 
+    on='GEOID', 
+    how='inner'
+)
+combined.columns
+print(combined.head())
+```
+
+2. Add in community name in combined files
+```{python}
+community = gpd.read_file(DATA_DIR / "Boundaries_-_Community_Areas_20260228.geojson")
+
+# match CRS with tracts (important)
+community = community.to_crs(combined.crs)
+
+# remove any leftover index_right column (prevents join error)
+if "index_right" in combined.columns:
+    combined = combined.drop(columns="index_right")
+
+# spatial join
+combined = gpd.sjoin(combined,
+    community[["community", "geometry"]],
+    how="left",
+    predicate="intersects"
+)
+
+# quick check
+print(combined.head())
+combined.columns
+
+combined.to_file( DATA_CLEAN_DIR / "combined.geojson", driver="GeoJSON")
+```
+
+
+```{python}
+
+```
+
+
+3. Visualization for double indexes scatter plot
+```{python}
+
+#quadrant + label + palette
+combined["quadrant"] = (
+    (combined["socio_index"] > 0).astype(int) * 2 +
+    (combined["env_exposure_index"] > 0).astype(int)
+)
+
+quadrant_labels = {
+    0: "Low Socio – Low Exposure(LL)",
+    1: "Low Socio – High Exposure(LH)",
+    2: "High Socio – Low Exposure(HL)",
+    3: "High Socio – High Exposure(HH)"
+}
+combined["quadrant_label"] = combined["quadrant"].map(quadrant_labels)
+
+palette = {
+    "Low Socio – Low Exposure(LL)": "#d9d9d9",
+    "Low Socio – High Exposure(LH)": "#80b1d3",
+    "High Socio – Low Exposure(HL)": "#fdb462",
+    "High Socio – High Exposure(HH)": "#e41a1c"
+}
+
+#Altair scatter + regression + reference lines
+base = alt.Chart(combined).properties(
+    width=520,   
+    height=520,
+    title="Environmental Exposure vs Socioeconomic Vulnerability"
+)
+
+points = base.mark_circle(opacity=0.7, size=30).encode(
+    x=alt.X("socio_index:Q", title="Socioeconomic Vulnerability"),
+    y=alt.Y("env_exposure_index:Q", title="Environmental Exposure"),
+    color=alt.Color(
+        "quadrant_label:N",
+        title="Typology",
+        scale=alt.Scale(domain=list(palette.keys()), range=list(palette.values())),
+        legend=alt.Legend(
+            orient='none',      
+            legendX=10,          
+            legendY=400,         
+            fillColor='white',   
+            padding=10,          
+            strokeColor='gray')  
+    ),
+    tooltip=[
+        alt.Tooltip("quadrant_label:N", title="Typology"),
+        alt.Tooltip("socio_index:Q", title="Socio", format=".3f"),
+        alt.Tooltip("env_exposure_index:Q", title="Exposure", format=".3f"),
+        alt.Tooltip("community:N", title="Community")  
+    ]
+)
+
+# regression line 
+reg_line = base.transform_regression(
+    "socio_index", "env_exposure_index"
+).mark_line(color="black").encode(
+    x="socio_index:Q",
+    y="env_exposure_index:Q"
+)
+
+# reference lines at x=0 and y=0
+vline = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="black").encode(x="x:Q")
+hline = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="black").encode(y="y:Q")
+
+chart = (points + reg_line + vline + hline)
+
+chart
+
+chart.save('scatter.png', scale_factor = 2)
+Image('scatter.png')
+```
+
+
+
+
+
+
+
+
+
+
+
+
