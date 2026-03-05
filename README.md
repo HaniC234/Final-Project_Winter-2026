@@ -73,3 +73,12 @@ code/
    ```bash
    python /streamlit-app final_project.qmd
    ```
+
+## Streamlit
+
+**Live Streamlit App:**  
+https://final-projectwinter-2026-penguin.streamlit.app
+
+Note: This Streamlit app is hosted on Streamlit Community Cloud. 
+If the app has not been accessed in the past 24 hours, the server may go to sleep. 
+When opening the link, it may take a few seconds for the app to wake up and load.
