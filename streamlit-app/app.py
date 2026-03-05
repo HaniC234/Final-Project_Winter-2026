@@ -8,8 +8,12 @@ import pydeck as pdk
 import altair as alt
 import matplotlib.pyplot as plt
 
-print("CWD:", os.getcwd())
-print("app.py:", Path(__file__).resolve())
+@st.cache_data
+def load_data():
+    root = Path(__file__).resolve().parents[1]  # repo root
+    path = root / "data" / "derived-data" / "combined.geojson"
+    gdf = gpd.read_file(path)
+    return gdf, gdf
 
 st.set_page_config(page_title="Chicago EJ Typology Explorer", layout="wide")
 
