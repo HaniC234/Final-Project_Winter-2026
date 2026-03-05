@@ -64,12 +64,12 @@ code/
 
 ## Usage
 
-1. Run preprocessing to clean data:
-   ```bash
-   python code/preprocessing.py
-   ```
-
-2. Run qmd file that generate all static plot and streamlit:
+1. Run final_project.qmd file since it contains everything including preprocessing:
    ```bash
    python final_project.qmd
+   ```
+
+2. Run app.py for the dashboard:
+   ```bash
+   python /streamlit-app final_project.qmd
    ```
