@@ -6,14 +6,10 @@ import pydeck as pdk
 import altair as alt
 import matplotlib.pyplot as plt
 
-# ----------------------------
 # Page config
-# ----------------------------
 st.set_page_config(page_title="Chicago EJ Typology Explorer", layout="wide")
 
-# ----------------------------
 # Quadrant config
-# ----------------------------
 QUAD_CONFIG = {
     0: {"label": "Low Socio – Low Exposure (LL)", "abbr": "LL", "color": [200, 200, 200], "hex": "#C8C8C8"},
     1: {"label": "Low Socio – High Exposure (LH)", "abbr": "LH", "color": [102, 194, 165], "hex": "#66C2A5"},
@@ -21,9 +17,7 @@ QUAD_CONFIG = {
     3: {"label": "High Socio – High Exposure (HH)", "abbr": "HH", "color": [141, 160, 203], "hex": "#8DA0CB"},
 }
 
-# ----------------------------
 # Data loader
-# ----------------------------
 @st.cache_data
 def load_data():
     # repo root: .../final-project_winter-2026/
@@ -54,22 +48,16 @@ def load_data():
 
     return gdf, gdf_low_res
 
-# ----------------------------
 # Helpers
-# ----------------------------
 def assign_quadrant(df, socio_th=0.0, expo_th=0.0):
     socio_hi = df["socio_index"] > socio_th
     expo_hi = df["env_exposure_index"] > expo_th
     return (socio_hi.astype(int) * 2 + expo_hi.astype(int))
-
-# ----------------------------
+    
 # Load data
-# ----------------------------
 gdf, gdf_altair = load_data()
 
-# ----------------------------
 # Sidebar
-# ----------------------------
 with st.sidebar:
     st.header("Classification Settings")
 
@@ -101,9 +89,7 @@ with st.sidebar:
         format_func=lambda x: QUAD_CONFIG[x]["label"],
     )
 
-# ----------------------------
 # Assign quadrants + display fields
-# ----------------------------
 gdf["quadrant"] = assign_quadrant(gdf, socio_th, expo_th)
 gdf["quad_label"] = gdf["quadrant"].map(lambda x: QUAD_CONFIG[int(x)]["label"])
 gdf["quad_abbr"] = gdf["quadrant"].map(lambda x: QUAD_CONFIG[int(x)]["abbr"])
@@ -113,16 +99,12 @@ gdf_show = gdf[gdf["quadrant"].isin(show_quads)].copy()
 gdf_show["socio_index"] = gdf_show["socio_index"].round(3)
 gdf_show["env_exposure_index"] = gdf_show["env_exposure_index"].round(3)
 
-# ----------------------------
 # Main page
-# ----------------------------
 st.title("Chicago Environmental Justice (EJ) Typology")
 
 tab_interactive, tab_static = st.tabs(["Interactive Map", "Static Maps"])
 
-# ----------------------------
 # Interactive tab
-# ----------------------------
 with tab_interactive:
     view_state = pdk.ViewState(latitude=41.8781, longitude=-87.6298, zoom=10, pitch=0)
 
@@ -164,9 +146,7 @@ with tab_interactive:
             unsafe_allow_html=True,
         )
 
-# ----------------------------
 # Static tab
-# ----------------------------
 with tab_static:
     st.header("Static Visualization")
     st.markdown("### Standardized Index Spatial Distribution")
@@ -188,7 +168,7 @@ with tab_static:
         st.pyplot(fig)
 
     with col2:
-        fig, ax = plt.subplots(figsize=(7, 7))
+        fig, ax = plt.subplots(figsize=(7, 6.9))
         gdf.plot(
             column="env_percentile",
             cmap="viridis",
@@ -228,9 +208,7 @@ with tab_static:
 
     st.altair_chart(scatter + vline + hline, use_container_width=True)
 
-# ----------------------------
 # Rankings
-# ----------------------------
 st.divider()
 
 with st.expander("View Community Rankings (Top 20 High-Environmental-Exposure)"):
