@@ -17,6 +17,7 @@ dependencies:
   - fiona
   - rtree
   - jupyter
+  - IPython
 
   - pip:
   - quarto
